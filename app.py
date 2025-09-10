@@ -55,7 +55,7 @@ def analyze_xray(image, mode):
     contrastGLCM, homogenity = compute_glcm_features(image)
     
     # Load reference image (relative path)
-    reference_image_path = "E:\\Image Data\\Other\\Image analysis\\Good images analysis\\14.jpg"
+    reference_image_path = "E:\\VsCode\\29-1-25_ImageQualityCheck\\Updated code for SharpScan\SharpScan\\ref_img\\GoodImageSpine.jpg"
     if not os.path.exists(reference_image_path):
         return "Error: Reference image not found", "neutral"
     
