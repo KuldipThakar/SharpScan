@@ -5,13 +5,12 @@ from skimage.metrics import structural_similarity as ssim
 from skimage.feature import graycomatrix, graycoprops
 from PIL import Image
 import os
+import requests
+from io import BytesIO
 
 def compute_laplacian_variance(image):
     laplacian = cv2.Laplacian(image, cv2.CV_64F)
     return laplacian.var()
-
-#def compute_ssim(image1, image2):
-    #return ssim(image1, image2)
 
 def compute_contrast(image):
     min_intensity, max_intensity = np.min(image), np.max(image)
@@ -20,7 +19,6 @@ def compute_contrast(image):
 
 def compute_segmented_brightness(image):
     return np.mean(image)
-
 
 def compute_glcm_features(image):
     glcm = graycomatrix(image, distances=[1], angles=[0], levels=256, symmetric=True, normed=True)
@@ -37,41 +35,51 @@ def analyze_xray(image, mode):
     if image is None:
         return "Error: Unable to load image", "neutral"
     
-    # Check bit depth
+    # Check bit depth and image type
     if image.dtype == np.uint16:
-        return "Error: Image is 16-bit, not 24-bit", "neutral"
-    elif len(image.shape) == 3 and image.shape[2] == 3:
+        return "Error: Image is 16-bit, only 8-bit grayscale or 24-bit RGB images are supported", "neutral"
+    
+    # Convert to grayscale if RGB, or keep as is if already grayscale
+    if len(image.shape) == 3 and image.shape[2] == 3:
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         bit_depth = 24
-    else:
+    elif len(image.shape) == 2:
         bit_depth = 8
+    else:
+        return "Error: Invalid image format, must be 8-bit grayscale or 24-bit RGB", "neutral"
     
-    if bit_depth != 24:
-        return "Error: Image is not 24-bit", "neutral"
-    
-    image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     exi_value = compute_segmented_brightness(image)
     blurriness = compute_laplacian_variance(image)
     ContrastMicleson = compute_contrast(image)
     contrastGLCM, homogenity = compute_glcm_features(image)
     
-    # Load reference image (relative path)
+    # Load reference image (try local path first, then GitHub raw URL)
     reference_image_path = os.path.join(os.path.dirname(__file__), "ref_img", "GoodImageSpine.jpg")
     print(f"DEBUG: Current working directory: {os.getcwd()}")
     print(f"DEBUG: Reference image path: {reference_image_path}")
     print(f"DEBUG: Does reference image exist? {os.path.exists(reference_image_path)}")
     
-    if not os.path.exists(reference_image_path):
-        return "Error: Reference image not found", "neutral"
+    if os.path.exists(reference_image_path):
+        reference_image = cv2.imread(reference_image_path, cv2.IMREAD_UNCHANGED)
+    else:
+        print("DEBUG: Falling back to GitHub raw URL")
+        reference_image_url = "https://raw.githubusercontent.com/KuldipThakar/SharpScan/main/ref_img/GoodImageSpine.jpg"
+        response = requests.get(reference_image_url)
+        if response.status_code != 200:
+            return f"Error: Reference image cannot be loaded from {reference_image_url}", "neutral"
+        reference_image = cv2.imdecode(np.frombuffer(response.content, np.uint8), cv2.IMREAD_UNCHANGED)
     
-    reference_image = cv2.imread(reference_image_path, cv2.IMREAD_UNCHANGED)
     if reference_image is None:
-        return "Error: Reference image cannot be loaded", "neutral"
+        return f"Error: Reference image cannot be loaded", "neutral"
+    
+    # Convert reference image to grayscale if needed
+    if len(reference_image.shape) == 3 and reference_image.shape[2] == 3:
+        reference_image = cv2.cvtColor(reference_image, cv2.COLOR_BGR2GRAY)
     
     image = image.astype(np.float64) / 255.0
     reference_image = reference_image.astype(np.float64) / 255.0
     reference_image = cv2.resize(reference_image, (image.shape[1], image.shape[0]))
     
-   # ssim_value = ssim(image, reference_image, data_range=1.0)
     sharpness = compute_sobel_sharpness(image)
     
     # Define intensity thresholds based on mode
@@ -84,7 +92,7 @@ def analyze_xray(image, mode):
         lateralSpine = True
         min_intensity, max_intensity = 80, 125
     else:
-        handselection= True
+        handselection = True
         print("hand selection true")
         min_intensity, max_intensity = 120, 210
     
@@ -92,19 +100,16 @@ def analyze_xray(image, mode):
     if min_intensity <= exi_value <= max_intensity:
         highlight = "✅ Intensity is optimal"
     else:
-        print("exival is ",exi_value)
+        print("exival is ", exi_value)
         highlight = "❌ Intensity is not optimal"
-        
     
     # Blurriness & Analysis
-    
-    
-    if (lateralSpine == True):
+    if lateralSpine:
         print("inside lateral spine checks ")
         if 200 <= blurriness < 280 and ContrastMicleson <= 1 and homogenity > 0.30 and sharpness < 20:
             quality = "✅ Great Image Quality (High Structural Similarity)"
             badge = "great"
-        elif 280 <= blurriness < 400 and 20< sharpness <40:
+        elif 280 <= blurriness < 400 and 20 < sharpness < 40:
             quality = "🟡 Good Image Quality"
             badge = "good"
         elif 400 <= blurriness < 700 and ContrastMicleson > 1 and sharpness > 40:
@@ -113,12 +118,12 @@ def analyze_xray(image, mode):
         else:
             quality = "⚫ Poor Image Quality"
             badge = "bad"
-    elif(handselection== False and lateralSpine == False):
+    elif not handselection and not lateralSpine:
         print("inside spine selection")
         if 240 <= blurriness < 280 and ContrastMicleson <= 1 and homogenity > 0.40 and sharpness < 20:
             quality = "✅ Great Image Quality (High Structural Similarity)"
             badge = "great"
-        elif 280 <= blurriness < 400 and 20< sharpness <40:
+        elif 280 <= blurriness < 400 and 20 < sharpness < 40:
             quality = "🟡 Good Image Quality"
             badge = "good"
         elif 400 <= blurriness < 700 and ContrastMicleson > 1 and sharpness > 40:
@@ -135,7 +140,7 @@ def analyze_xray(image, mode):
         elif 376 <= blurriness < 400 and 20 < sharpness < 30:
             quality = "🟡 Good Image Quality"
             badge = "good"
-        elif 401 <= blurriness < 700 and ContrastMicleson > 1 and  31 < sharpness <40:
+        elif 401 <= blurriness < 700 and ContrastMicleson > 1 and 31 < sharpness < 40:
             quality = "🔴 Average Image Quality"
             badge = "average"
         else:
@@ -164,32 +169,32 @@ st.markdown("""
     .badge-good {
         background-color: #ffc107;
         color: black;
-            padding: 5px 10px;
-            border-radius: 5px;
-            font-weight: bold;
-        }
-        .badge-average {
-            background-color: #dc3545;
-            color: white;
-            padding: 5px 10px;
-            border-radius: 5px;
-            font-weight: bold;
-        }
-        .badge-bad {
-            background-color: #343a40;
-            color: white;
-            padding: 5px 10px;
-            border-radius: 5px;
-            font-weight: bold;
-        }
-        .badge-neutral {
-            background-color: #6c757d;
-            color: white;
-            padding: 5px 10px;
-            border-radius: 5px;
-            font-weight: bold;
-        }
-        .result-box {
+        padding: 5px 10px;
+        border-radius: 5px;
+        font-weight: bold;
+    }
+    .badge-average {
+        background-color: #dc3545;
+        color: white;
+        padding: 5px 10px;
+        border-radius: 5px;
+        font-weight: bold;
+    }
+    .badge-bad {
+        background-color: #343a40;
+        color: white;
+        padding: 5px 10px;
+        border-radius: 5px;
+        font-weight: bold;
+    }
+    .badge-neutral {
+        background-color: #6c757d;
+        color: white;
+        padding: 5px 10px;
+        border-radius: 5px;
+        font-weight: bold;
+    }
+    .result-box {
         background-color: #f8f9fa;
         padding: 20px;
         border-radius: 10px;
